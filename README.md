@@ -1,79 +1,101 @@
-# message-transfer (POC)
+# Azure Service Bus Message Transfer
 
-Spring Boot app (Gradle) that can run locally and later be adapted for **Azure Functions – Flex Consumption**.  
-It demonstrates:
-- Scheduling (future) orders to a **source** Service Bus queue (BLUE)
-- Transferring scheduled orders to a **destination** Service Bus queue (GREEN) by **cancelling & re-scheduling**
-- Storing scheduled **sequence numbers in Redis** keyed by `orderId` for future cancellation/transfer
-- Validation endpoint to **peek** messages and compare metadata, before/after transfer
-- Best-effort error routing to a simple **POC dead-letter** queue
+Spring Boot application for transferring scheduled messages between Azure Service Bus queues with Redis state tracking.
 
-> Note: Real Service Bus DLQ is for *received* messages; scheduling/cancel failures aren’t auto-DLQ’d.  
-> For POC we write failed-transfer records to a normal queue `poc-dead-letter`.
+## Quick Start
 
-## Endpoints
+### Prerequisites
+- Java 17+
+- Azure Service Bus (2 queues: blue → green)
+- Redis (local or Azure Cache)
 
-- `POST /api/schedule?count=1000&delaySeconds=3600`  
-  Generates and **schedules** fake future orders to the **source** queue.  
-  Persists `orderId -> sequenceNumber` in Redis.
+### Setup
+```bash
+# 1. Clone and setup
+git clone https://github.com/ShanmugaSivapragasam/message-transfer.git
+cd message-transfer
+./setup-local.sh
 
-- `POST /api/transfer`  
-  Reads all `orderId -> sequenceNumber` keys from Redis, **cancels** on source, and **re-schedules** same payload to destination queue.  
-  On success, removes the Redis key for that order. On error, writes a small JSON to `poc-dead-letter`.
+# 2. Configure credentials
+cp env.example .env
+# Edit .env with your Azure Service Bus and Redis credentials
 
-- `GET /api/validate?peek=10`  
-  **Peeks** `peek` messages from **both** queues and prints selected metadata for a quick diff.
+# 3. Start Redis (if using local)
+brew install redis && brew services start redis
 
-## Local Run
-
-1. Start Redis locally (e.g. via Docker):
-   ```bash
-   docker compose up -d
-   ```
-
-2. Copy `src/main/resources/application.properties` and fill Service Bus connection strings & queues.
-3. Run:
-   ```bash
-   ./gradlew bootRun
-   ```
-
-## Azure Functions – Flex Consumption (Next Step)
-
-This app is structured so the core services are Spring Beans.  
-To move to Functions, create Java HTTP-trigger wrappers that delegate to the same services.  
-A sample `functions/` folder with a skeleton is included for reference (not required for local POC).
-
-## Terraform (Optional)
-
-Under `infra/terraform` you’ll find a minimal example for:
-- 2 Service Bus namespaces & queues (BLUE/GREEN)
-- A basic Azure Cache for Redis (Optional for real; for POC you can use local Redis)
-
-> **Never commit secrets**. Use environment variables or a Key Vault in real setups.
-
-## Data Model
-
-Payload example:
-```json
-{
-  "orderId": "ORD-2025-09-14-000001",
-  "placedAt": "2025-09-14T14:30:00Z",
-  "lineItems": [
-    {"sku":"ITEM-1","name":"Coffee","qty":1,"price":3.50},
-    {"sku":"ITEM-2","name":"Fries","qty":1,"price":2.00},
-    {"sku":"ITEM-3","name":"Burger","qty":1,"price":6.50}
-  ],
-  "payment": {"method":"CARD","maskedPan":"**** **** **** 4242","amount":12.00,"currency":"USD"},
-  "metadata": {"brand":"generic","channel":"app","version":"1.0.0"}
-}
+# 4. Run application
+./run-app.sh
 ```
 
-Message metadata set:
-- `messageId` = `orderId`
-- `correlationId` = `orderId`
-- `contentType` = `application/json`
-- Application properties: `brand`, `channel`, `version`, `scheduledFor`
+### Test the API
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Schedule 5 orders to source queue (1 hour delay)
+curl -X POST "http://localhost:8080/api/schedule?count=5&delaySeconds=3600"
+
+# Transfer all scheduled orders from source → destination
+curl -X POST http://localhost:8080/api/transfer-enhanced
+
+# Check order status
+curl http://localhost:8080/api/order/ORD-2025-10-01-000001
+
+# Cancel specific order
+curl -X POST http://localhost:8080/api/cancel/ORD-2025-10-01-000001
+
+# Debug Redis state
+curl http://localhost:8080/debug/redis/stats
+```
+
+## Core Features
+
+- **Message Scheduling**: Schedule orders to source Azure Service Bus queue
+- **Safe Transfer**: Cancel from source → reschedule to destination with payload preservation  
+- **Redis State Tracking**: Separate key patterns for source/destination sequence numbers
+- **Order Lifecycle**: Cancel orders, check status, debug Redis state
+- **Error Handling**: Failed transfers logged to error queue
+
+## Redis Data Structure
+```
+order:source:{orderId}       → source sequence numbers
+order:dest:{orderId}         → destination sequence numbers  
+order:payload:{orderId}      → original message payloads
+order:dest:payload:{orderId} → destination message payloads
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+| POST | `/api/schedule` | Schedule orders to source queue |
+| POST | `/api/transfer-enhanced` | Transfer orders source → destination |
+| POST | `/api/cancel/{orderId}` | Cancel specific order |
+| GET | `/api/order/{orderId}` | Get order status |
+| GET | `/api/validate` | Peek both queues for validation |
+| GET | `/debug/redis/stats` | Redis state summary |
+
+## Environment Variables
+
+```bash
+# Azure Service Bus
+AZURE_SERVICEBUS_SOURCE_CONNECTION_STRING="Endpoint=sb://..."
+AZURE_SERVICEBUS_DEST_CONNECTION_STRING="Endpoint=sb://..."
+
+# Redis
+SPRING_DATA_REDIS_HOST=localhost                    # or Azure Cache host
+SPRING_DATA_REDIS_PORT=6379                         # or 6380 for Azure
+SPRING_DATA_REDIS_PASSWORD=""                       # empty for local
+SPRING_DATA_REDIS_SSL_ENABLED=false                 # true for Azure
+```
+
+## Deployment
+
+Ready for Azure Functions Flex Consumption. See `functions/` folder for HTTP trigger examples.
+
+Optional Terraform infrastructure templates in `infra/` folder.
 
 ---
 
-MIT-0 for the POC code.
+**License**: MIT-0
