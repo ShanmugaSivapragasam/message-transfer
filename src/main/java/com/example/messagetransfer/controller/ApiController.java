@@ -78,4 +78,17 @@ public class ApiController {
         );
         return ResponseEntity.ok(resp);
     }
+
+    @GetMapping("/validate/transfer-timings")
+    public ResponseEntity<?> validateTransferTimings() {
+        Map<String, Object> validation = service.validateTransferTimings();
+        return ResponseEntity.ok(validation);
+    }
+
+    @GetMapping("/validate/full")
+    public ResponseEntity<?> validateFullTransfer(@RequestParam(name = "peek", required = false) Integer peek) {
+        int p = (peek == null) ? defaultPeek : Math.max(1, peek);
+        Map<String, Object> validation = service.validateTransferWithQueuePeek(p);
+        return ResponseEntity.ok(validation);
+    }
 }

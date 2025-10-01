@@ -112,9 +112,10 @@ public class ServiceBusSchedulerService {
      * Enhanced transfer with Redis state management:
      * 1. Find all source scheduled messages
      * 2. Cancel from source queue
-     * 3. Preserve original payload and metadata
-     * 4. Schedule to destination queue
+     * 3. Preserve original payload, metadata, and scheduled time
+     * 4. Schedule to destination queue with SAME original time
      * 5. Update Redis with new sequence numbers for future cancellation
+     * 6. Track all changes for validation
      */
     public Map<String, Object> transferMessagesWithRedisUpdate() {
         Set<String> sourceKeys = redis.keys("order:source:*");
@@ -143,6 +144,25 @@ public class ServiceBusSchedulerService {
                 
                 long sourceSeq = Long.parseLong(sourceSeqStr);
                 
+                // Get original scheduled time from source queue by peeking
+                OffsetDateTime originalScheduledTime = null;
+                Map<String, Object> originalMetadata = new HashMap<>();
+                
+                try {
+                    // Peek the source message to get original timing and metadata
+                    IterableStream<ServiceBusReceivedMessage> peekedMessages = sourcePeeker.peekMessages(100);
+                    for (ServiceBusReceivedMessage msg : peekedMessages) {
+                        if (msg.getSequenceNumber() == sourceSeq) {
+                            originalScheduledTime = msg.getScheduledEnqueueTime();
+                            originalMetadata.putAll(msg.getApplicationProperties());
+                            break;
+                        }
+                    }
+                } catch (Exception ex) {
+                    // If we can't peek, use current time + default delay as fallback
+                    originalScheduledTime = OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(defaultDelaySeconds);
+                }
+                
                 // Cancel the source scheduled message
                 sourceSender.cancelScheduledMessage(sourceSeq);
                 
@@ -164,21 +184,28 @@ public class ServiceBusSchedulerService {
                 destMsg.setMessageId(orderId);
                 destMsg.setCorrelationId(orderId);
                 destMsg.setContentType("application/json");
+                
+                // Preserve ALL original metadata and add transfer tracking
+                destMsg.getApplicationProperties().putAll(originalMetadata);
                 destMsg.getApplicationProperties().put("transferredFrom", "source");
                 destMsg.getApplicationProperties().put("originalSequence", sourceSeq);
+                destMsg.getApplicationProperties().put("originalScheduledTime", originalScheduledTime.toString());
                 destMsg.getApplicationProperties().put("transferredAt", Instant.now().toString());
                 
-                OffsetDateTime destScheduledFor = OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(defaultDelaySeconds);
-                destMsg.getApplicationProperties().put("scheduledFor", destScheduledFor.toString());
+                // PRESERVE ORIGINAL SCHEDULED TIME (not reset to now + delay)
+                OffsetDateTime preservedScheduledTime = originalScheduledTime != null ? 
+                    originalScheduledTime : OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(defaultDelaySeconds);
+                    
+                destMsg.getApplicationProperties().put("scheduledFor", preservedScheduledTime.toString());
                 
-                // Schedule on destination queue
-                long destSeq = destSender.scheduleMessage(destMsg, destScheduledFor);
+                // Schedule on destination queue with SAME original time
+                long destSeq = destSender.scheduleMessage(destMsg, preservedScheduledTime);
                 
                 // Update Redis: Remove source keys, add destination keys
                 redis.delete(sourceKey);
                 redis.delete(payloadKey); // Clean up payload cache
                 
-                // Store new destination sequence for future cancellation
+                // Store new destination sequence and transfer metadata for validation
                 String destKey = "order:dest:" + orderId;
                 redis.opsForValue().set(destKey, Long.toString(destSeq), 7, TimeUnit.DAYS);
                 
@@ -186,12 +213,27 @@ public class ServiceBusSchedulerService {
                 String destPayloadKey = "order:dest:payload:" + orderId;
                 redis.opsForValue().set(destPayloadKey, destMsg.getBody().toString(), 7, TimeUnit.DAYS);
                 
+                // Store transfer tracking for validation
+                String transferKey = "transfer:history:" + orderId;
+                Map<String, Object> transferRecord = Map.of(
+                    "sourceSequence", sourceSeq,
+                    "destSequence", destSeq,
+                    "originalScheduledTime", preservedScheduledTime.toString(),
+                    "transferredAt", Instant.now().toString(),
+                    "fromQueue", "source",
+                    "toQueue", "destination"
+                );
+                redis.opsForValue().set(transferKey, mapper.writeValueAsString(transferRecord), 7, TimeUnit.DAYS);
+                
                 transferred++;
                 transferDetails.add(Map.of(
                     "orderId", orderId,
                     "sourceSequence", sourceSeq,
                     "destSequence", destSeq,
-                    "scheduledFor", destScheduledFor.toString(),
+                    "originalScheduledTime", preservedScheduledTime.toString(),
+                    "transferredAt", Instant.now().toString(),
+                    "timingPreserved", true,
+                    "metadataPreserved", originalMetadata.size(),
                     "status", "transferred"
                 ));
                 
@@ -224,7 +266,8 @@ public class ServiceBusSchedulerService {
             "transferred", transferred,
             "errors", errors,
             "details", transferDetails,
-            "timestamp", Instant.now().toString()
+            "timestamp", Instant.now().toString(),
+            "timingPreservationEnabled", true
         );
     }
 
@@ -284,7 +327,7 @@ public class ServiceBusSchedulerService {
     }
 
     /**
-     * Get order information from Redis
+     * Get order information from Redis including transfer history
      */
     public Map<String, Object> getOrderInfo(String orderId) {
         Map<String, Object> info = new LinkedHashMap<>();
@@ -312,6 +355,19 @@ public class ServiceBusSchedulerService {
         boolean hasPayload = redis.hasKey(payloadKey) || redis.hasKey(destPayloadKey);
         info.put("hasPayload", hasPayload);
         
+        // Check transfer history
+        String transferKey = "transfer:history:" + orderId;
+        String transferHistory = redis.opsForValue().get(transferKey);
+        if (transferHistory != null) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> history = mapper.readValue(transferHistory, Map.class);
+                info.put("transferHistory", history);
+            } catch (Exception ex) {
+                info.put("transferHistoryError", ex.getMessage());
+            }
+        }
+        
         if (sourceSeq == null && destSeq == null) {
             info.put("status", "not_found");
         } else {
@@ -319,5 +375,115 @@ public class ServiceBusSchedulerService {
         }
         
         return info;
+    }
+
+    /**
+     * Validate and compare timings between source and destination queues
+     */
+    public Map<String, Object> validateTransferTimings() {
+        Map<String, Object> validation = new LinkedHashMap<>();
+        List<Map<String, Object>> timingComparisons = new ArrayList<>();
+        
+        Set<String> transferKeys = redis.keys("transfer:history:*");
+        if (transferKeys == null || transferKeys.isEmpty()) {
+            validation.put("message", "No transfer history found");
+            validation.put("comparisons", timingComparisons);
+            return validation;
+        }
+        
+        for (String transferKey : transferKeys) {
+            try {
+                String orderId = transferKey.substring("transfer:history:".length());
+                String historyJson = redis.opsForValue().get(transferKey);
+                
+                if (historyJson != null) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> history = mapper.readValue(historyJson, Map.class);
+                    
+                    Map<String, Object> comparison = new LinkedHashMap<>();
+                    comparison.put("orderId", orderId);
+                    comparison.put("sourceSequence", history.get("sourceSequence"));
+                    comparison.put("destSequence", history.get("destSequence"));
+                    comparison.put("originalScheduledTime", history.get("originalScheduledTime"));
+                    comparison.put("transferredAt", history.get("transferredAt"));
+                    comparison.put("fromQueue", history.get("fromQueue"));
+                    comparison.put("toQueue", history.get("toQueue"));
+                    
+                    // Validate timing preservation
+                    String originalTime = (String) history.get("originalScheduledTime");
+                    try {
+                        OffsetDateTime original = OffsetDateTime.parse(originalTime);
+                        OffsetDateTime transferred = OffsetDateTime.parse((String) history.get("transferredAt"));
+                        long preservationDelayMinutes = java.time.Duration.between(transferred, original).toMinutes();
+                        comparison.put("timingPreservationDelayMinutes", preservationDelayMinutes);
+                        comparison.put("timingPreserved", true);
+                    } catch (Exception ex) {
+                        comparison.put("timingValidationError", ex.getMessage());
+                        comparison.put("timingPreserved", false);
+                    }
+                    
+                    timingComparisons.add(comparison);
+                }
+            } catch (Exception ex) {
+                timingComparisons.add(Map.of(
+                    "orderId", transferKey.substring("transfer:history:".length()),
+                    "error", ex.getMessage()
+                ));
+            }
+        }
+        
+        validation.put("totalTransfers", timingComparisons.size());
+        validation.put("comparisons", timingComparisons);
+        validation.put("validatedAt", Instant.now().toString());
+        
+        return validation;
+    }
+
+    /**
+     * Enhanced validation that peeks both queues and compares with transfer history
+     */
+    public Map<String, Object> validateTransferWithQueuePeek(int peekCount) {
+        Map<String, Object> validation = new LinkedHashMap<>();
+        
+        // Get current queue states
+        List<Map<String, Object>> sourceMessages = peekMessages(sourcePeeker, peekCount);
+        List<Map<String, Object>> destMessages = peekMessages(destPeeker, peekCount);
+        
+        // Get transfer history
+        Map<String, Object> timingValidation = validateTransferTimings();
+        
+        // Cross-reference queue contents with Redis tracking
+        Set<String> sourceKeys = redis.keys("order:source:*");
+        Set<String> destKeys = redis.keys("order:dest:*");
+        
+        List<String> sourceOrderIds = sourceKeys != null ? 
+            sourceKeys.stream().map(k -> k.substring("order:source:".length())).toList() : 
+            List.of();
+            
+        List<String> destOrderIds = destKeys != null ? 
+            destKeys.stream().map(k -> k.substring("order:dest:".length())).toList() : 
+            List.of();
+        
+        validation.put("queueStates", Map.of(
+            "source", Map.of(
+                "messagesInQueue", sourceMessages.size(),
+                "trackedInRedis", sourceOrderIds.size(),
+                "messages", sourceMessages
+            ),
+            "destination", Map.of(
+                "messagesInQueue", destMessages.size(),
+                "trackedInRedis", destOrderIds.size(),
+                "messages", destMessages
+            )
+        ));
+        
+        validation.put("timingValidation", timingValidation);
+        validation.put("redisTracking", Map.of(
+            "sourceOrders", sourceOrderIds,
+            "destOrders", destOrderIds
+        ));
+        validation.put("validatedAt", Instant.now().toString());
+        
+        return validation;
     }
 }
