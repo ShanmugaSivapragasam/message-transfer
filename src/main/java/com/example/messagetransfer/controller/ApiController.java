@@ -69,26 +69,23 @@ public class ApiController {
     }
 
     @GetMapping("/validate")
-    public ResponseEntity<?> validate(@RequestParam(name = "peek", required = false) Integer peek) {
+    public ResponseEntity<?> validate(@RequestParam(name = "peek", required = false) Integer peek,
+                                    @RequestParam(name = "includeTimings", required = false, defaultValue = "false") Boolean includeTimings) {
         int p = (peek == null) ? defaultPeek : Math.max(1, peek);
-        var list = service.validatePeek(p);
-        ValidateResponse resp = new ValidateResponse(
-                (List<Map<String, Object>>) list.get(0).get("source"),
-                (List<Map<String, Object>>) list.get(1).get("destination")
-        );
-        return ResponseEntity.ok(resp);
-    }
-
-    @GetMapping("/validate/transfer-timings")
-    public ResponseEntity<?> validateTransferTimings() {
-        Map<String, Object> validation = service.validateTransferTimings();
-        return ResponseEntity.ok(validation);
-    }
-
-    @GetMapping("/validate/full")
-    public ResponseEntity<?> validateFullTransfer(@RequestParam(name = "peek", required = false) Integer peek) {
-        int p = (peek == null) ? defaultPeek : Math.max(1, peek);
-        Map<String, Object> validation = service.validateTransferWithQueuePeek(p);
-        return ResponseEntity.ok(validation);
+        
+        if (includeTimings) {
+            // Enhanced validation with timing analysis
+            Map<String, Object> fullValidation = service.validateTransferWithQueuePeek(p);
+            return ResponseEntity.ok(fullValidation);
+        } else {
+            // Simple queue peek validation
+            var list = service.validatePeek(p);
+            @SuppressWarnings("unchecked")
+            ValidateResponse resp = new ValidateResponse(
+                    (List<Map<String, Object>>) list.get(0).get("source"),
+                    (List<Map<String, Object>>) list.get(1).get("destination")
+            );
+            return ResponseEntity.ok(resp);
+        }
     }
 }

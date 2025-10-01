@@ -38,11 +38,11 @@ curl -X POST "http://localhost:8080/api/schedule?count=5&delaySeconds=3600"
 # Transfer all scheduled orders from source → destination (preserves original timing)
 curl -X POST http://localhost:8080/api/transfer-enhanced
 
-# Validate transfer timing preservation
-curl http://localhost:8080/api/validate/transfer-timings
+# Basic validation - peek both queues
+curl "http://localhost:8080/api/validate?peek=10"
 
-# Full validation with queue analysis
-curl http://localhost:8080/api/validate/full
+# Enhanced validation with timing preservation analysis
+curl "http://localhost:8080/api/validate?peek=10&includeTimings=true"
 
 # Check order status with transfer history
 curl http://localhost:8080/api/order/ORD-2025-10-01-000001
@@ -79,9 +79,8 @@ order:dest:payload:{orderId} → destination message payloads
 | POST | `/api/transfer-enhanced` | Transfer orders source → destination **with timing preservation** |
 | POST | `/api/cancel/{orderId}` | Cancel specific order |
 | GET | `/api/order/{orderId}` | Get order status and transfer history |
-| GET | `/api/validate` | Peek both queues for validation |
-| GET | `/api/validate/transfer-timings` | Validate transfer timing preservation |
-| GET | `/api/validate/full` | Full validation with queue peek + timing analysis |
+| GET | `/api/validate` | Basic queue validation (peek messages) |
+| GET | `/api/validate?includeTimings=true` | **Enhanced validation** with timing preservation analysis |
 | GET | `/debug/redis/stats` | Redis state summary |
 
 ## Environment Variables
