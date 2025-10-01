@@ -1,0 +1,21 @@
+# Local development configuration with actual values
+# COPY THIS FILE and rename to application-local.properties
+# DO NOT commit this file to git
+
+# === Azure Service Bus Configuration ===
+azure.servicebus.source.connection-string=Endpoint=sb://shan-bg-blue.servicebus.windows.net/;SharedAccessKeyName=app-manage;SharedAccessKey=YOUR_ACTUAL_BLUE_KEY
+azure.servicebus.dest.connection-string=Endpoint=sb://shan-bg-green.servicebus.windows.net/;SharedAccessKeyName=app-manage;SharedAccessKey=YOUR_ACTUAL_GREEN_KEY
+
+# === Redis Configuration ===
+spring.data.redis.host=localhost
+spring.data.redis.port=6379
+# spring.data.redis.password=  # Leave empty for local Redis
+
+# === Queue Names (Optional overrides) ===
+# azure.servicebus.source.queue=orders-scheduled-blue
+# azure.servicebus.dest.queue=orders-scheduled-green
+# azure.servicebus.error.queue=poc-dead-letter
+
+# === App Configuration ===
+# app.defaultScheduleDelaySeconds=3600
+# app.validation.peekCount=10

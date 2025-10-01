@@ -41,6 +41,33 @@ public class ApiController {
         return ResponseEntity.ok(summary);
     }
 
+    @PostMapping("/transfer-enhanced")
+    public ResponseEntity<?> transferEnhanced() {
+        Map<String, Object> summary = service.transferMessagesWithRedisUpdate();
+        return ResponseEntity.ok(summary);
+    }
+
+    @PostMapping("/cancel/{orderId}")
+    public ResponseEntity<?> cancelOrder(@PathVariable String orderId) {
+        Map<String, Object> result = service.cancelOrder(orderId);
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/order/{orderId}")
+    public ResponseEntity<?> getOrderInfo(@PathVariable String orderId) {
+        Map<String, Object> info = service.getOrderInfo(orderId);
+        return ResponseEntity.ok(info);
+    }
+
+    @GetMapping("/health")
+    public ResponseEntity<?> health() {
+        return ResponseEntity.ok(Map.of(
+            "status", "UP",
+            "timestamp", java.time.Instant.now().toString(),
+            "service", "Message Transfer Service"
+        ));
+    }
+
     @GetMapping("/validate")
     public ResponseEntity<?> validate(@RequestParam(name = "peek", required = false) Integer peek) {
         int p = (peek == null) ? defaultPeek : Math.max(1, peek);

@@ -35,3 +35,7 @@ build/
 ##env
 .env
 .sample
+application-local.properties
+# Keep the example files for documentation
+!application-local.properties.example
+!env.example
