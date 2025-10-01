@@ -88,4 +88,10 @@ public class ApiController {
             return ResponseEntity.ok(resp);
         }
     }
+
+    @DeleteMapping("/cleanup")
+    public ResponseEntity<?> cleanupAllQueues() {
+        Map<String, Object> result = service.cleanupAllQueues();
+        return ResponseEntity.ok(result);
+    }
 }

@@ -50,6 +50,9 @@ curl http://localhost:8080/api/order/ORD-2025-10-01-000001
 # Cancel specific order
 curl -X POST http://localhost:8080/api/cancel/ORD-2025-10-01-000001
 
+# ⚠️ DANGER: Completely clean up both queues (for testing only!)
+curl -X DELETE http://localhost:8080/api/cleanup
+
 # Debug Redis state
 curl http://localhost:8080/debug/redis/stats
 ```
@@ -81,6 +84,7 @@ order:dest:payload:{orderId} → destination message payloads
 | GET | `/api/order/{orderId}` | Get order status and transfer history |
 | GET | `/api/validate` | Basic queue validation (peek messages) |
 | GET | `/api/validate?includeTimings=true` | **Enhanced validation** with timing preservation analysis |
+| DELETE | `/api/cleanup` | **⚠️ DANGER**: Completely empty both queues and clear Redis |
 | GET | `/debug/redis/stats` | Redis state summary |
 
 ## Environment Variables

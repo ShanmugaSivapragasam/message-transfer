@@ -486,4 +486,103 @@ public class ServiceBusSchedulerService {
         
         return validation;
     }
+
+    /**
+     * DANGER: Completely clean up both source and destination queues
+     * This will cancel ALL scheduled messages and clear Redis tracking
+     * Use only for testing/development!
+     */
+    public Map<String, Object> cleanupAllQueues() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        int sourceCancelled = 0;
+        int destCancelled = 0;
+        int sourceErrors = 0;
+        int destErrors = 0;
+        List<String> operations = new ArrayList<>();
+        
+        try {
+            // 1. Clean up source queue using Redis tracking
+            Set<String> sourceKeys = redis.keys("order:source:*");
+            if (sourceKeys != null) {
+                for (String sourceKey : sourceKeys) {
+                    try {
+                        String orderId = sourceKey.substring("order:source:".length());
+                        String sourceSeqStr = redis.opsForValue().get(sourceKey);
+                        
+                        if (sourceSeqStr != null) {
+                            long sourceSeq = Long.parseLong(sourceSeqStr);
+                            sourceSender.cancelScheduledMessage(sourceSeq);
+                            redis.delete(sourceKey);
+                            redis.delete("order:payload:" + orderId);
+                            sourceCancelled++;
+                            operations.add("Cancelled source message: " + orderId + " (seq: " + sourceSeq + ")");
+                        }
+                    } catch (Exception ex) {
+                        sourceErrors++;
+                        operations.add("Error cancelling source message: " + ex.getMessage());
+                    }
+                }
+            }
+            
+            // 2. Clean up destination queue using Redis tracking
+            Set<String> destKeys = redis.keys("order:dest:*");
+            if (destKeys != null) {
+                for (String destKey : destKeys) {
+                    try {
+                        String orderId = destKey.substring("order:dest:".length());
+                        String destSeqStr = redis.opsForValue().get(destKey);
+                        
+                        if (destSeqStr != null) {
+                            long destSeq = Long.parseLong(destSeqStr);
+                            destSender.cancelScheduledMessage(destSeq);
+                            redis.delete(destKey);
+                            redis.delete("order:dest:payload:" + orderId);
+                            destCancelled++;
+                            operations.add("Cancelled destination message: " + orderId + " (seq: " + destSeq + ")");
+                        }
+                    } catch (Exception ex) {
+                        destErrors++;
+                        operations.add("Error cancelling destination message: " + ex.getMessage());
+                    }
+                }
+            }
+            
+            // 3. Clean up transfer history
+            Set<String> transferKeys = redis.keys("transfer:history:*");
+            int historyCleared = 0;
+            if (transferKeys != null) {
+                for (String transferKey : transferKeys) {
+                    redis.delete(transferKey);
+                    historyCleared++;
+                }
+            }
+            
+            result.put("status", "completed");
+            result.put("sourceQueue", Map.of(
+                "cancelled", sourceCancelled,
+                "errors", sourceErrors
+            ));
+            result.put("destinationQueue", Map.of(
+                "cancelled", destCancelled,
+                "errors", destErrors
+            ));
+            result.put("transferHistoryCleared", historyCleared);
+            result.put("totalOperations", sourceCancelled + destCancelled + historyCleared);
+            result.put("operations", operations);
+            result.put("timestamp", Instant.now().toString());
+            
+            // Log cleanup operation
+            operations.add("=== CLEANUP SUMMARY ===");
+            operations.add("Source cancelled: " + sourceCancelled + ", errors: " + sourceErrors);
+            operations.add("Dest cancelled: " + destCancelled + ", errors: " + destErrors);
+            operations.add("Transfer history cleared: " + historyCleared);
+            
+        } catch (Exception ex) {
+            result.put("status", "error");
+            result.put("error", ex.getMessage());
+            result.put("timestamp", Instant.now().toString());
+        }
+        
+        return result;
+    }
 }
