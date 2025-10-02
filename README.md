@@ -62,24 +62,6 @@ sequenceDiagram
     API-->>-Client: Queue states + timing analysis
 ```
 
-## Key Architectural Changes
-
-### 🎯 **Direct Queue Inspection (New Approach)**
-- **Source of Truth**: Azure Service Bus queues (not Redis)
-- **Transfer Logic**: Always peek source queue directly for ALL scheduled messages
-- **No Redis Dependency**: Works even if Redis is empty, corrupted, or offline
-- **Simplified**: Single code path, no Redis key iteration
-
-### 📊 **Redis Usage (Simplified)**
-- **Before**: Required for operation (tracked which messages to transfer)
-- **Now**: Optional for debugging only (stores sequence numbers for tracking)
-- **Benefits**: More reliable, handles Redis failures gracefully
-
-### 🔄 **Message Processing**
-- **Scheduled Messages**: Transfers ALL scheduled messages found in queue
-- **Active Messages**: Completely ignored (logged and skipped)
-- **Perfect Preservation**: Exact timing, content, and metadata maintained
-
 ## Quick Start
 
 ### Prerequisites
@@ -146,7 +128,7 @@ curl http://localhost:8080/debug/redis/stats
 
 ## Core Features
 
-### 🎯 **Simplified Architecture**
+### 🎯 ** Architecture**
 - **Direct Queue Inspection**: Always peek Azure Service Bus source queue directly
 - **No Redis Dependency**: Transfer works regardless of Redis state
 - **Scheduled Messages Only**: Automatically filters and processes only future-scheduled messages
@@ -259,32 +241,3 @@ curl -X POST http://localhost:8080/api/transfer
 curl http://localhost:8080/debug/redis/stats
 ```
 
-## Benefits of Simplified Architecture
-
-### 🎯 **Reliability Improvements**
-- **No Redis Single Point of Failure**: Transfer continues even if Redis is down
-- **Source of Truth**: Azure Service Bus queues are authoritative (not Redis tracking)
-- **Graceful Degradation**: Missing Redis data doesn't break transfers
-- **Error Recovery**: Can recover from Redis data corruption/loss
-
-### ⚡ **Performance Benefits**
-- **No Redis Key Iteration**: Eliminates Redis `KEYS` operations
-- **Direct Queue Access**: Single peek operation instead of sequence number lookups
-- **Reduced Complexity**: Single code path, fewer error conditions
-- **Batch Processing**: Handles up to 1000 messages in one operation
-
-### 🛠️ **Operational Advantages**
-- **Easier Debugging**: Direct queue inspection shows actual state
-- **Simplified Monitoring**: Fewer moving parts to monitor
-- **Redis Optional**: Can deploy without Redis for simple use cases
-- **Self-Healing**: Automatically discovers all scheduled messages regardless of tracking
-
-### 🔄 **Migration Benefits**
-- **Zero Redis Dependency**: Works with empty/corrupted Redis
-- **Backward Compatible**: Existing Redis data still used for debugging
-- **Progressive Enhancement**: Can add Redis tracking later for advanced features
-- **Disaster Recovery**: Easy recovery from Redis failures
-
----
-
-**License**: MIT-0
