@@ -145,6 +145,29 @@ curl http://localhost:8080/debug/redis/stats
 - **Not Required**: Transfer works without Redis data
 - **Graceful Degradation**: Handles Redis failures transparently
 
+### 🔄 **Batched Processing for Large Message Sets**
+- **Azure Service Bus Peek Limit**: ~256 messages per peek operation
+- **Batching Strategy**: Processes messages in 250-message batches
+- **Large Scale Support**: Handles up to 50,000 messages by default (configurable)
+- **Memory Efficient**: Processes batches sequentially, not all at once
+- **Progress Tracking**: Logs batch progress for monitoring large transfers
+
+#### Batch Processing Details:
+```bash
+# Example for 30,000 messages:
+Batch 1: sequences 1-250 (250 messages)
+Batch 2: sequences 251-500 (250 messages)  
+...
+Batch 120: sequences 29,751-30,000 (250 messages)
+
+# Result: All 30,000 messages processed (120 batches × 250 messages)
+
+# For 100k+ messages, use configuration or multiple calls:
+app.transfer.maxMessages=100000  # Increase limit
+# OR
+# Multiple transfer calls for operational control
+```
+
 ## Redis Data Structure (Optional Debug Info)
 ```
 order:source:{orderId}       → source sequence numbers (scheduling phase)
@@ -191,6 +214,7 @@ SPRING_DATA_REDIS_SSL_ENABLED=false                 # true for Azure
 
 # Application Settings
 app.defaultScheduleDelaySeconds=3600                # Default delay when scheduling
+app.transfer.maxMessages=50000                      # Maximum messages per transfer (default: 50,000)
 ```
 
 ## Transfer Behavior
@@ -201,17 +225,51 @@ app.defaultScheduleDelaySeconds=3600                # Default delay when schedul
 - Exact original scheduled timing maintained
 - Complete message payload preserved
 
+### 📊 **Scale Limits**
+- **Default Maximum**: 50,000 messages per transfer operation
+- **Configurable**: Set `app.transfer.maxMessages` to adjust limit
+- **Large Scale Strategy**: For 100k+ messages, use multiple transfer calls
+- **Memory Efficient**: Processes in 250-message batches regardless of total
+
 ### ❌ **What Gets Skipped**
 - Active messages (no future scheduled time)
 - Messages already delivered/consumed
 - Invalid or corrupted messages (logged as errors)
 
 ### 🔍 **Transfer Process**
-1. **Direct Queue Peek**: Inspect source queue for up to 1000 messages
-2. **Filter Scheduled**: Only process messages scheduled for future delivery
-3. **Cancel & Transfer**: Cancel source, preserve everything, reschedule to destination
-4. **Optional Tracking**: Store destination sequence in Redis for debugging
-5. **Error Handling**: Log failures to dead letter queue, continue processing
+1. **Batched Queue Peek**: Inspect source queue in 250-message batches (Azure Service Bus limit)
+2. **Large Scale Processing**: Handles up to 10,000 messages across multiple batches
+3. **Filter Scheduled**: Only process messages scheduled for future delivery
+4. **Cancel & Transfer**: Cancel source, preserve everything, reschedule to destination
+5. **Optional Tracking**: Store destination sequence in Redis for debugging
+6. **Error Handling**: Log failures to dead letter queue, continue processing
+7. **Progress Monitoring**: Log batch progress for large message sets
+
+### 📊 **Performance Characteristics**
+- **Batch Size**: 250 messages per Azure Service Bus peek operation
+- **Default Maximum**: 50,000 messages per transfer (configurable)
+- **Memory Usage**: Processes batches sequentially, not all messages at once
+- **Scalability**: Linear processing time based on number of scheduled messages
+- **Reliability**: Continues processing even if individual batches fail
+
+#### Large Message Set Examples:
+```bash
+# Transfer 30,000 scheduled messages (within default limit):
+curl -X POST http://localhost:8080/api/transfer
+# Result: All 30k messages transferred in 120 batches
+
+# Transfer 100,000 messages (exceeds default limit):
+# Option 1: Increase limit via configuration
+app.transfer.maxMessages=100000
+
+# Option 2: Multiple transfer calls
+curl -X POST http://localhost:8080/api/transfer  # Transfers first 50k
+curl -X POST http://localhost:8080/api/transfer  # Transfers remaining 50k
+
+# Option 3: Check remaining and repeat
+curl http://localhost:8080/api/transfer/status   # Check how many remain
+curl -X POST http://localhost:8080/api/transfer  # Transfer next batch
+```
 
 ## Deployment
 
@@ -229,7 +287,23 @@ curl "http://localhost:8080/api/validate?peek=50"
 # Verify transfer behavior with metadata logging
 curl -X POST "http://localhost:8080/api/transfer?printMetadata=true"
 
-# Check application logs for DIRECT_SCHEDULED_FOUND and DIRECT_TRANSFER_SUCCESS
+# Check application logs for batch processing progress:
+# - DIRECT_SCHEDULED_FOUND and DIRECT_TRANSFER_SUCCESS
+# - "Peeking batch starting from sequence X"
+# - "Completed batched peek operation - total messages examined: N"
+```
+
+### Large Message Set Issues
+```bash
+# For transfers stopping early (e.g., 250 of 5000 messages):
+# 1. Check if Azure Service Bus peek limit was hit
+# 2. Verify batching is working in logs
+# 3. Look for "Moving to next batch starting from sequence X"
+
+# Example log patterns for successful large transfers:
+# "Peeking batch starting from sequence 1, batch size 250, total peeked so far: 0"
+# "Moving to next batch starting from sequence 251, batch processed: 250"
+# "Completed batched peek operation - total messages examined: 5000, transferred: 5000"
 ```
 
 ### Redis Issues

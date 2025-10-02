@@ -39,6 +39,9 @@ public class ServiceBusSchedulerService {
     @Value("${app.defaultScheduleDelaySeconds:3600}")
     private int defaultDelaySeconds;
 
+    @Value("${app.transfer.maxMessages:50000}")
+    private int maxTotalMessages;
+
     public ServiceBusSchedulerService(ServiceBusSenderClient sourceSender,
                                       ServiceBusSenderClient destSender,
                                       ServiceBusSenderClient errorSender,
@@ -167,18 +170,40 @@ public class ServiceBusSchedulerService {
         int metadataLoggedCount = 0;
         final int MAX_METADATA_LOGS = 10;
         
+        // Batching configuration
+        final int PEEK_BATCH_SIZE = 250;
+        int totalPeeked = 0;
+        
         try {
             Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
-                "Direct queue inspection starting - checking for scheduled messages...");
+                String.format("Direct queue inspection starting - max messages: %d, batch size: %d", 
+                    maxTotalMessages, PEEK_BATCH_SIZE));
             
-            // Peek source queue directly for ALL scheduled messages
-            IterableStream<ServiceBusReceivedMessage> peekedMessages = sourcePeeker.peekMessages(1000);
+            // Peek source queue in batches to handle large numbers of messages
+            // Azure Service Bus peek limit is ~256 messages, so we'll use 250 per batch
+            long fromSequenceNumber = 1; // Start from beginning
+            boolean hasMoreMessages = true;
             
-            for (ServiceBusReceivedMessage msg : peekedMessages) {
-                try {
-                    // Only process scheduled messages (ignore active ones)
-                    if (msg.getScheduledEnqueueTime() != null && 
-                        msg.getScheduledEnqueueTime().isAfter(OffsetDateTime.now(ZoneOffset.UTC))) {
+            while (hasMoreMessages && totalPeeked < maxTotalMessages) {
+                Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
+                    String.format("Peeking batch starting from sequence %d, batch size %d, total peeked so far: %d", 
+                        fromSequenceNumber, PEEK_BATCH_SIZE, totalPeeked));
+                
+                IterableStream<ServiceBusReceivedMessage> peekedMessages = 
+                    sourcePeeker.peekMessages(PEEK_BATCH_SIZE, fromSequenceNumber);
+                
+                int batchCount = 0;
+                long maxSequenceInBatch = fromSequenceNumber;
+                
+                for (ServiceBusReceivedMessage msg : peekedMessages) {
+                    batchCount++;
+                    totalPeeked++;
+                    maxSequenceInBatch = Math.max(maxSequenceInBatch, msg.getSequenceNumber());
+                    
+                    try {
+                        // Only process scheduled messages (ignore active ones)
+                        if (msg.getScheduledEnqueueTime() != null && 
+                            msg.getScheduledEnqueueTime().isAfter(OffsetDateTime.now(ZoneOffset.UTC))) {
                         
                         String orderId = msg.getMessageId() != null ? msg.getMessageId() : "unknown-" + msg.getSequenceNumber();
                         
@@ -283,6 +308,25 @@ public class ServiceBusSchedulerService {
                 }
             }
             
+            // Check if we got a full batch (indicating more messages might be available)
+            if (batchCount < PEEK_BATCH_SIZE) {
+                hasMoreMessages = false;
+                Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
+                    String.format("Reached end of queue - batch size %d < %d, total processed: %d", 
+                        batchCount, PEEK_BATCH_SIZE, totalPeeked));
+            } else {
+                // Move to next batch starting after the highest sequence number we've seen
+                fromSequenceNumber = maxSequenceInBatch + 1;
+                Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
+                    String.format("Moving to next batch starting from sequence %d, batch processed: %d", 
+                        fromSequenceNumber, batchCount));
+            }
+        }
+        
+        Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
+            String.format("Completed batched peek operation - total messages examined: %d, transferred: %d", 
+                totalPeeked, transferred));
+            
         } catch (Exception ex) {
             errors++;
             transferDetails.add(Map.of(
@@ -295,17 +339,20 @@ public class ServiceBusSchedulerService {
         }
         
         Logger.getLogger(ServiceBusSchedulerService.class.getName()).info(
-            String.format("DIRECT_TRANSFER_COMPLETE: %d transferred, %d errors, %d skipped_active. Method=DIRECT_QUEUE_TRANSFER",
-                transferred, errors, skippedActive)
+            String.format("DIRECT_TRANSFER_COMPLETE: %d transferred, %d errors, %d skipped_active, %d total_examined. Method=BATCHED_DIRECT_QUEUE_TRANSFER",
+                transferred, errors, skippedActive, totalPeeked)
         );
         
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("transferred", transferred);
         result.put("errors", errors);
         result.put("skippedActive", skippedActive);
+        result.put("totalExamined", totalPeeked);
         result.put("details", transferDetails);
         result.put("timestamp", Instant.now().toString());
-        result.put("method", "direct_queue_transfer");
+        result.put("method", "batched_direct_queue_transfer");
+        result.put("batchSize", PEEK_BATCH_SIZE);
+        result.put("maxTotalMessages", maxTotalMessages);
         result.put("timingPreservationEnabled", true);
         result.put("messagePreservationEnabled", true);
         result.put("messageType", "SCHEDULED_MESSAGES_ONLY");
