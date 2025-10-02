@@ -36,14 +36,10 @@ public class ApiController {
     }
 
     @PostMapping("/transfer")
-    public ResponseEntity<?> transfer() {
-        Map<String, Object> summary = service.transferAllFromRedis();
-        return ResponseEntity.ok(summary);
-    }
-
-    @PostMapping("/transfer-enhanced")
-    public ResponseEntity<?> transferEnhanced() {
-        Map<String, Object> summary = service.transferMessagesWithRedisUpdate();
+    public ResponseEntity<?> transfer(
+            @RequestParam(name = "printMetadata", required = false, defaultValue = "false") Boolean printMetadata,
+            @RequestParam(name = "cleanupSource", required = false, defaultValue = "true") Boolean cleanupSource) {
+        Map<String, Object> summary = service.transferMessagesWithRedisUpdate(printMetadata, cleanupSource);
         return ResponseEntity.ok(summary);
     }
 
@@ -93,5 +89,61 @@ public class ApiController {
     public ResponseEntity<?> cleanupAllQueues() {
         Map<String, Object> result = service.cleanupAllQueues();
         return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/cleanup")
+    public ResponseEntity<?> cleanupAllQueuesPost() {
+        Map<String, Object> result = service.cleanupAllQueues();
+        Map<String, Object> redisResult = service.purgeRedisKeys("*", true);
+        result.putAll(redisResult);
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/redis/purge")
+    public ResponseEntity<?> purgeRedisKeys(
+            @RequestParam(name = "pattern", required = false, defaultValue = "order:*") String pattern,
+            @RequestParam(name = "includeArchive", required = false, defaultValue = "false") Boolean includeArchive) {
+        Map<String, Object> result = service.purgeRedisKeys(pattern, includeArchive);
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/redis/keys")
+    public ResponseEntity<?> listRedisKeys(
+            @RequestParam(name = "pattern", required = false, defaultValue = "*") String pattern) {
+        Map<String, Object> result = service.listRedisKeys(pattern);
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/redis/recover")
+    public ResponseEntity<?> recoverRedisFromQueues(
+            @RequestParam(name = "maxMessages", required = false, defaultValue = "100") Integer maxMessages) {
+        Map<String, Object> result = service.rebuildRedisFromQueues(maxMessages);
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/transfer/status")
+    public ResponseEntity<?> getTransferStatus() {
+        Map<String, Object> status = service.getTransferStatus();
+        return ResponseEntity.ok(status);
+    }
+
+    @GetMapping("/debug/queue-analysis")
+    public ResponseEntity<?> debugQueueAnalysis(
+            @RequestParam(name = "peek", required = false, defaultValue = "20") Integer peek) {
+        Map<String, Object> analysis = service.debugQueueStates(peek);
+        return ResponseEntity.ok(analysis);
+    }
+
+    @GetMapping("/debug/timing-analysis")
+    public ResponseEntity<?> debugTimingAnalysis() {
+        Map<String, Object> analysis = service.debugTimingAnalysis();
+        return ResponseEntity.ok(analysis);
+    }
+
+    @GetMapping("/debug/dead-letter")
+    public ResponseEntity<?> checkDeadLetterQueue(
+            @RequestParam(name = "peek", required = false, defaultValue = "10") Integer peek) {
+        Map<String, Object> deadLetterStatus = service.checkDeadLetterQueue(peek);
+        return ResponseEntity.ok(deadLetterStatus);
     }
 }

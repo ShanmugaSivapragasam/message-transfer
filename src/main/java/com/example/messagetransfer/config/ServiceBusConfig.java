@@ -69,4 +69,14 @@ public class ServiceBusConfig {
                 .disableAutoComplete()
                 .buildClient();
     }
+
+    @Bean
+    public ServiceBusReceiverClient errorReceiver() {
+        return new ServiceBusClientBuilder()
+                .connectionString(destConnectionString)
+                .receiver()
+                .queueName(errorQueue)
+                .disableAutoComplete()
+                .buildClient();
+    }
 }

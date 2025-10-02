@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- Application-specific logger -->
+    <logger name="com.example.messagetransfer" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <!-- Reduce Azure SDK noise -->
+    <logger name="com.azure.core.amqp" level="WARN"/>
+    <logger name="com.azure.messaging.servicebus" level="WARN"/>
+    <logger name="com.azure.core.amqp.implementation" level="WARN"/>
+
+    <!-- Keep some important Azure logs -->
+    <logger name="com.azure.messaging.servicebus.ServiceBusSenderAsyncClient" level="INFO"/>
+    <logger name="com.azure.messaging.servicebus.implementation.ManagementChannel" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

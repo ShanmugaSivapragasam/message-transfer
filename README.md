@@ -32,11 +32,20 @@ brew install redis && brew services start redis
 # Health check
 curl http://localhost:8080/api/health
 
-# Schedule 5 orders to source queue (1 hour delay)
-curl -X POST "http://localhost:8080/api/schedule?count=5&delaySeconds=3600"
+# Schedule 5 orders to source queue (scheduled for 5am tomorrow)
+curl -X POST "http://localhost:8080/api/schedule?count=5&delaySeconds=54000"
 
-# Transfer all scheduled orders from source → destination (preserves original timing)
-curl -X POST http://localhost:8080/api/transfer-enhanced
+# Transfer SCHEDULED messages (default: cleanup source, preserve 5am timing)
+curl -X POST http://localhost:8080/api/transfer
+
+# Transfer with metadata logging (max 10 samples for testing)
+curl -X POST "http://localhost:8080/api/transfer?printMetadata=true"
+
+# Transfer without cleaning source Redis keys (for debugging)
+curl -X POST "http://localhost:8080/api/transfer?cleanupSource=false"
+
+# Transfer with both metadata logging and source cleanup disabled
+curl -X POST "http://localhost:8080/api/transfer?printMetadata=true&cleanupSource=false"
 
 # Basic validation - peek both queues
 curl "http://localhost:8080/api/validate?peek=10"
@@ -79,7 +88,9 @@ order:dest:payload:{orderId} → destination message payloads
 |--------|----------|-------------|
 | GET | `/api/health` | Health check |
 | POST | `/api/schedule` | Schedule orders to source queue |
-| POST | `/api/transfer-enhanced` | Transfer orders source → destination **with timing preservation** |
+| POST | `/api/transfer` | **Single transfer endpoint** with flexible parameters |
+| POST | `/api/transfer?printMetadata=true` | Transfer with metadata logging (max 10 samples) |
+| POST | `/api/transfer?cleanupSource=false` | Transfer without cleaning source Redis keys |
 | POST | `/api/cancel/{orderId}` | Cancel specific order |
 | GET | `/api/order/{orderId}` | Get order status and transfer history |
 | GET | `/api/validate` | Basic queue validation (peek messages) |
